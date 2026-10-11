@@ -28,16 +28,15 @@ This makes the code easy to read, test, and change.
                      v
 +--------------------------------------------------+
 |  src/model.py       Model manager                |
-|   - loads model from disk                        |
-|   - runs inference on CPU                        |
-|   - unloads when idle                            |
+|   - validates model paths (canonical, no symlinks, size)   |
+|   - Phase 1 stub: no inference (backend is a stub)   |
 +--------------------------------------------------+
                      | Python calls
                      v
 +--------------------------------------------------+
 |  src/memory.py      Memory monitor               |
 |   - reads /proc/meminfo                          |
-|   - enforces RAM limits                          |
+|   - percentage-based RAM limit (default 75%)   |
 +--------------------------------------------------+
                      | reads
                      v
@@ -51,7 +50,9 @@ This makes the code easy to read, test, and change.
 ### 1. HTTP Server (`src/server.py`)
 
 A small HTTP server using Python's built-in `http.server`.
-It runs on `127.0.0.1` by default (never on `0.0.0.0`).
+It binds to `127.0.0.1` by default; starting on any unsafe host
+(0.0.0.0, *, LAN addresses, IPv6 loopback, or hostnames resolving
+to non-loopback addresses) fails at startup.
 
 Endpoints:
 - `GET /health` - health check for systemd
@@ -70,35 +71,39 @@ All input from clients passes through this layer before use:
 
 ### 3. Model Manager (`src/model.py`)
 
-Loads and unloads the model:
-- Supports GGUF format (works with llama.cpp backend)
-- Runs inference on CPU with memory limits
-- Auto-unloads after idle timeout
-- Keeps only one model in memory
+Loads and validates models:
+- Phase 1: path canonicalization, symlink rejection, size check,
+  allow-listed model directory, and memory guard (no file data is
+  read in Phase 1; the real backend is a stub)
+- Phase 2: GGUF loading via a CPU backend (llama.cpp planned)
+- Phase 2: auto-unload after idle timeout and one-model-at-a-time
 
 ### 4. Memory Monitor (`src/memory.py`)
 
 Reads `/proc/meminfo` to track RAM usage:
-- Total RAM, free RAM, available RAM
-- Enforces a safety limit (default 6 GB used max)
-- Triggers model unload when low on memory
+- Total RAM, buffers, cached, and available RAM
+- Percentage-based safety limit (default 75%); enforced at model
+  load time in Phase 2 (in Phase 1 it is measured but the load stub
+  consumes no RAM)
 
 ### 5. Configuration (`config/config.yaml`)
 
-All settings come from one config file:
+All settings come from one config file (`config/config.yaml`, which is
+ignored by Git so no secrets are tracked):
 ```yaml
 server:
-  host: "127.0.0.1"
+  host: "127.0.0.1"  # 0.0.0.0 or * fails at startup
   port: 5001
 model:
-  path: "/home/user/models/tiny-model.gguf"
+  path: "/home/user/models/tiny-model.gguf"  # set in config/config.yaml
   max_tokens: 512
   idle_timeout_seconds: 300
+  model_dir: "/home/user/models"  # optional: restrict loads to this dir
 security:
   max_prompt_tokens: 4096
   max_request_size_bytes: 1048576
 memory:
-  max_usage_percent: 75
+  max_usage_percent: 75  # refuses to run the model above this %
 ```
 
 ## Design Rules

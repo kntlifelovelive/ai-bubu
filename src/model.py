@@ -3,12 +3,37 @@
 Handles loading, running, and unloading the language model.
 In this phase it is a skeleton: the real inference backend
 will be plugged in during Phase 2.
+
+Security notes (read before Phase 2 integration):
+- All model paths are canonicalized and symlinks are rejected before
+  any file is touched. Do not relax this in Phase 2.
+- The model file is validated (existence, extension, size) WITHOUT
+  reading it into memory. Phase 2 must keep this guarantee.
+- The memory guard must be enforced BEFORE the backend reads the file.
+- The backend must never be invoked with shell=True. User input
+  (prompts) must never be interpolated into a command line; always
+  pass arguments as a list. The prompt filter in src/security.py is
+  NOT a security boundary and must not be relied upon for command
+  execution protection.
 """
 
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Generator, Optional
+from typing import Generator, Optional
+
+import src.config as config_module
+import src.memory as memory
+
+DEFAULTS = {
+    "model": {
+        "path": None,
+        "max_tokens": 512,
+        "idle_timeout_seconds": 300,
+        "model_dir": None,
+        "max_size_bytes": None,
+    },
+}
 
 
 @dataclass
@@ -29,6 +54,7 @@ class ModelManager:
     - One model in memory at a time
     - Idle timeout auto-unload
     - No inference yet (Phase 2)
+    - Strict path and size validation (Phase 1 security fixes)
     """
 
     def __init__(self) -> None:
@@ -38,12 +64,20 @@ class ModelManager:
         """Return True if a model is currently loaded."""
         return self.state.loaded and self.state.error is None
 
-    def load(self, path: str) -> ModelState:
+    def load(self, path: str, conf: config_module.Config | None = None) -> ModelState:
         """Load a model from disk.
 
-        In Phase 2 this will load a GGUF file into the
-        inference engine. For now it validates the path
-        and simulates a load time.
+        In Phase 1 this is a stub: the model file is validated but
+        never read into RAM. In Phase 2 the real backend goes here,
+        and it MUST honor the path, size, and memory checks below.
+
+        Args:
+            path: The model file path from the config or the client.
+            conf: The loaded configuration; used to resolve the allowed
+                model directory and the model size limit.
+
+        Returns:
+            ModelState describing success or a plain-language error.
         """
         self.state = ModelState()
 
@@ -51,24 +85,92 @@ class ModelManager:
             self.state.error = "Model path is empty"
             return self.state
 
-        if not os.path.exists(path):
-            self.state.error = f"Model file not found: {path}"
+        # Canonicalize the path (resolves .., ., and symlink components).
+        real_path = os.path.realpath(path)
+
+        # Reject symlinks: they can point to arbitrary files and bypass
+        # any directory allowlist.
+        if os.path.islink(path):
+            self.state.error = "Symlinked model paths are not allowed"
             return self.state
 
-        if not path.lower().endswith((".gguf", ".safetensors", ".bin")):
+        if not os.path.exists(real_path):
+            self.state.error = "Model file not found"
+            return self.state
+
+        if os.path.isdir(real_path):
+            self.state.error = "Model path points to a directory"
+            return self.state
+
+        # Validate the extension of the resolved file.
+        if not real_path.lower().endswith((".gguf", ".safetensors", ".bin")):
             self.state.error = (
                 "Only .gguf, .safetensors, and .bin models are supported"
             )
             return self.state
 
+        # Enforce the configured allowed model directory (if any).
+        model_dir = None
+        if conf is not None:
+            model_dir = getattr(conf, "model_dir", None)
+        if model_dir:
+            real_model_dir = os.path.realpath(model_dir)
+            if not (
+                real_path.startswith(real_model_dir + os.sep)
+                or real_path == real_model_dir
+            ):
+                self.state.error = (
+                    "Model path is outside the allowed model directory"
+                )
+                return self.state
+
+        # Validate the file size WITHOUT reading the file into memory
+        # (os.stat only returns metadata).
+        try:
+            file_size = os.path.getsize(real_path)
+        except OSError:
+            self.state.error = "Could not stat model file"
+            return self.state
+
+        max_size = None
+        if conf is not None:
+            max_size = getattr(conf, "model_max_size_bytes", None)
+        if max_size is None or max_size < 1:
+            # Derive a safe cap from available RAM: never load a model
+            # larger than half of total RAM.
+            try:
+                mem = memory.get_memory_info()
+                max_size = mem.total_bytes // 2
+            except Exception:
+                max_size = 4 * 1024 * 1024 * 1024  # 4 GB fallback
+
+        if file_size > max_size:
+            self.state.error = (
+                f"Model file too large (limit {max_size} bytes)"
+            )
+            return self.state
+
+        # Enforce the configured memory safety limit before the loader
+        # consumes RAM. In Phase 1 the loader is a stub and reads no
+        # model data, but the guard is exercised now so Phase 2 inherits
+        # it. If the host is already above the configured limit, refuse
+        # to run the model (fail closed).
+        if conf is not None and not memory.memory_safe(
+            conf.memory_max_usage_percent
+        ):
+            self.state.error = "Insufficient memory to load model"
+            return self.state
+
+        # Phase 2: replace the block below with the real backend load,
+        # e.g. llama.cpp, using subprocess with shell=False and an
+        # argument list. User prompts must never be interpolated here.
         start = time.monotonic()
-        # Phase 2: replace with real loading, e.g. llama.cpp
         time.sleep(0.01)
         elapsed = time.monotonic() - start
 
         self.state = ModelState(
             loaded=True,
-            path=path,
+            path=None,  # Do not echo the resolved path: avoid filesystem
             load_time_seconds=round(elapsed, 3),
             last_used_at=time.time(),
         )

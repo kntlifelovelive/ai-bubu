@@ -14,7 +14,9 @@
 5. **No untrusted script execution** - downloaded files are never
    run automatically. They are reviewed first.
 6. **No arbitrary shell access** - the model cannot run shell commands.
-   Input is validated by the security layer before any processing.
+   Phase 1 has no shell execution at all. The security layer
+   validates prompts, sizes, paths, and binding hosts; these are
+   guards, not proofs of safety, and Phase 2 must enforce them.
 7. **No sensitive data in logs** - prompts, keys, and tokens are not
    written to log files.
 8. **Fail closed** - if validation fails or memory is low, the request
@@ -36,7 +38,10 @@
 
 | Threat                        | Mitigation                                  |
 |-------------------------------|---------------------------------------------|
-| Remote code execution         | No shell access from the model; input clean |
+| Remote code execution         | Phase 1: no shell execution at all; the model
+|                               | runs only as a validated stub. Phase 2 must invoke
+|                               | the backend via subprocess without shell=True and
+|                               | must never interpolate prompts into a command line.
 | DoS by large requests         | Size and token limits enforced              |
 | Memory exhaustion             | RAM cap + auto-unload of model              |
 | Exposing to the internet      | Bound to localhost; user must opt-in         |
@@ -45,10 +50,11 @@
 ## Configuration Files
 
 - `config/config.example.yaml` - template with safe defaults
-- `config/config.yaml` - your local copy (ignored by Git)
+- `config/config.yaml` - your local copy (ignored by Git; add your model
+  path here, not secrets)
 
-Do not copy `config/config.example.yaml` directly to `config/config.yaml`
-with real keys in it, then commit. Keep real values in `config/.env`.
+Add your model path in `config/config.yaml`; do not commit real keys.
+
 
 ## Testing Security
 

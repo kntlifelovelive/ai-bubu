@@ -1,12 +1,14 @@
 """Configuration loader for ai-bubu.
 
 Reads settings from a YAML file. Falls back to safe defaults
-if the file is missing or invalid.
+if the file is missing or unreadable, but fails loudly on invalid
+values. No value is silently replaced with a default.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
+import src.memory as memory
 
 DEFAULTS = {
     "server": {
@@ -17,6 +19,8 @@ DEFAULTS = {
         "path": None,
         "max_tokens": 512,
         "idle_timeout_seconds": 300,
+        "model_dir": None,
+        "max_size_bytes": None,
     },
     "security": {
         "max_request_size_bytes": 1048576,
@@ -30,6 +34,15 @@ DEFAULTS = {
 CONFIG_PATH = os.environ.get("AIBUBU_CONFIG", "config/config.yaml")
 
 
+class ConfigError(ValueError):
+    """Raised when the configuration file contains invalid values.
+
+    Bad values are not silently replaced with defaults; the server
+    fails closed so a misconfiguration cannot weaken a security
+    setting (for example, host or port).
+    """
+
+
 @dataclass
 class Config:
     """All configuration for the server."""
@@ -39,7 +52,11 @@ class Config:
     model_path: str | None = DEFAULTS["model"]["path"]
     model_max_tokens: int = DEFAULTS["model"]["max_tokens"]
     model_idle_timeout_seconds: int = DEFAULTS["model"]["idle_timeout_seconds"]
-    security_max_request_size_bytes: int = DEFAULTS["security"]["max_request_size_bytes"]
+    model_dir: str | None = DEFAULTS["model"]["model_dir"]
+    model_max_size_bytes: int | None = DEFAULTS["model"]["max_size_bytes"]
+    security_max_request_size_bytes: int = DEFAULTS["security"][
+        "max_request_size_bytes"
+    ]
     security_max_prompt_tokens: int = DEFAULTS["security"]["max_prompt_tokens"]
     memory_max_usage_percent: int = DEFAULTS["memory"]["max_usage_percent"]
 
@@ -51,6 +68,8 @@ class Config:
                 "path": self.model_path,
                 "max_tokens": self.model_max_tokens,
                 "idle_timeout_seconds": self.model_idle_timeout_seconds,
+                "model_dir": self.model_dir,
+                "max_size_bytes": self.model_max_size_bytes,
             },
             "security": {
                 "max_request_size_bytes": self.security_max_request_size_bytes,
@@ -60,15 +79,94 @@ class Config:
         }
 
 
+def validate_config(config: Config) -> None:
+    """Validate every configuration value.
+
+    Raises:
+        ConfigError: if any value is missing, out of range, or
+            incorrectly typed. Failing closed: bad values are not
+            silently replaced with defaults.
+    """
+    errors: list[str] = []
+
+    if not isinstance(config.server_host, str) or not config.server_host.strip():
+        errors.append("server.host must be a non-empty string")
+
+    if not isinstance(config.server_port, int) or isinstance(
+        config.server_port, bool
+    ):
+        errors.append("server.port must be an integer")
+    elif not 1 <= config.server_port <= 65535:
+        errors.append("server.port must be between 1 and 65535")
+
+    if config.model_path is not None:
+        if not isinstance(config.model_path, str) or not config.model_path.strip():
+            errors.append("model.path must be a non-empty string when set")
+
+    if not isinstance(config.model_max_tokens, int) or isinstance(
+        config.model_max_tokens, bool
+    ):
+        errors.append("model.max_tokens must be an integer")
+    elif config.model_max_tokens < 1:
+        errors.append("model.max_tokens must be >= 1")
+
+    if not isinstance(config.model_idle_timeout_seconds, int) or isinstance(
+        config.model_idle_timeout_seconds, bool
+    ):
+        errors.append("model.idle_timeout_seconds must be an integer")
+    elif config.model_idle_timeout_seconds < 0:
+        errors.append("model.idle_timeout_seconds must be >= 0")
+
+    if config.model_max_size_bytes is not None:
+        if not isinstance(config.model_max_size_bytes, int) or isinstance(
+            config.model_max_size_bytes, bool
+        ):
+            errors.append("model.max_size_bytes must be an integer when set")
+        elif config.model_max_size_bytes < 1:
+            errors.append("model.max_size_bytes must be >= 1 when set")
+
+    if not isinstance(config.security_max_request_size_bytes, int) or isinstance(
+        config.security_max_request_size_bytes, bool
+    ):
+        errors.append("security.max_request_size_bytes must be an integer")
+    elif config.security_max_request_size_bytes < 1024:
+        errors.append("security.max_request_size_bytes must be >= 1024")
+
+    if not isinstance(config.security_max_prompt_tokens, int) or isinstance(
+        config.security_max_prompt_tokens, bool
+    ):
+        errors.append("security.max_prompt_tokens must be an integer")
+    elif config.security_max_prompt_tokens < 1:
+        errors.append("security.max_prompt_tokens must be >= 1")
+
+    if not isinstance(config.memory_max_usage_percent, (int, float)) or isinstance(
+        config.memory_max_usage_percent, bool
+    ):
+        errors.append("memory.max_usage_percent must be a number")
+    elif not 0 <= config.memory_max_usage_percent <= 100:
+        errors.append("memory.max_usage_percent must be between 0 and 100")
+
+    if errors:
+        raise ConfigError(
+            "Invalid configuration:\n  " + "\n  ".join(errors)
+        )
+
+
 def load_config(path: str | None = None) -> Config:
     """Load configuration from a YAML file or use defaults.
+
+    A missing or unreadable config file falls back to safe defaults.
+    An existing file with invalid values fails loudly (no fallback).
 
     Args:
         path: Optional path to the config file. Defaults to
             AIBUBU_CONFIG environment variable, or 'config/config.yaml'.
 
     Returns:
-        A Config object with safe defaults.
+        A Config object with validated values.
+
+    Raises:
+        ConfigError: if an existing config file contains invalid values.
     """
     path = path or os.environ.get("AIBUBU_CONFIG", CONFIG_PATH)
     config = Config()
@@ -89,6 +187,7 @@ def load_config(path: str | None = None) -> Config:
         return config
 
     config = _merge(config, data, DEFAULTS)
+    validate_config(config)
     return config
 
 
@@ -173,6 +272,8 @@ def _merge(base: Config, data: dict, defaults: dict) -> Config:
         model_idle_timeout_seconds=merged["model"].get(
             "idle_timeout_seconds", defaults["model"]["idle_timeout_seconds"]
         ),
+        model_dir=merged["model"].get("model_dir"),
+        model_max_size_bytes=merged["model"].get("max_size_bytes"),
         security_max_request_size_bytes=merged["security"].get(
             "max_request_size_bytes", defaults["security"]["max_request_size_bytes"]
         ),

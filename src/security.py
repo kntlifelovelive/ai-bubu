@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import ipaddress
+import socket
 
 
 class AccessDenied(Exception):
@@ -98,25 +99,48 @@ class SecurityValidator:
         return num_tokens
 
     def check_host(self, host: str) -> str:
-        """Validate the bind host is not publicly exposed.
+        """Validate the bind host resolves to an IPv4 loopback address.
+
+        ai-bubu's server stack is IPv4-only and binds to loopback
+        addresses only (127.0.0.1 by default). Binding to any
+        non-loopback address (including LAN addresses, IPv6 loopback,
+        or the public Internet) is rejected before any socket is
+        opened, so localhost-only is enforced at startup.
 
         Raises:
-            AccessDenied: if the host would expose the API to the
-                public network.
+            AccessDenied: if the host would expose the API to any
+                non-loopback network interface.
         """
-        host = host.strip().lower()
-        if host in ("0.0.0.0", "*", "[::]"):
+        host = host.strip()
+        if host in ("0.0.0.0", "*", "[::]", "[::1]"):
             raise AccessDenied(
-                "Host must not be 0.0.0.0 or * (public exposure)"
+                "Host must not be 0.0.0.0, * or [::]"
             )
         try:
             addr = ipaddress.ip_address(host)
-            if addr.is_unspecified or addr.is_any:
-                raise AccessDenied("Host must not be unspecified")
-            if addr.is_multicast:
-                raise AccessDenied("Host must not be multicast")
         except ValueError:
-            pass
+            # Resolve hostnames to IPv4 only; require loopback.
+            try:
+                infos = socket.getaddrinfo(host, None, socket.AF_INET)
+            except socket.gaierror:
+                raise AccessDenied(f"Cannot resolve host: {host}")
+            if not infos:
+                raise AccessDenied(f"Host does not resolve to an IPv4 address: {host}")
+            for info in infos:
+                resolved = info[4][0]
+                r = ipaddress.ip_address(resolved)
+                if not r.is_loopback:
+                    raise AccessDenied(
+                        f"Host resolves to non-loopback address {resolved}; "
+                        "only IPv4 loopback (127.0.0.1) is allowed for binding"
+                    )
+        else:
+            # Only IPv4 loopback is supported by this server.
+            if addr.version != 4 or addr.is_multicast or not addr.is_loopback:
+                raise AccessDenied(
+                    "Only the IPv4 loopback address (127.0.0.1) is allowed; "
+                    f"got {host}"
+                )
         return host
 
     def is_allowed_host(self, client_ip: str) -> bool:

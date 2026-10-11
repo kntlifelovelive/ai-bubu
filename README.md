@@ -9,11 +9,15 @@ The system is built to work on low-memory hardware first
 
 ## What It Does
 
-- Runs a local language model on CPU only (no GPU required)
-- Exposes a simple chat API on `127.0.0.1` (localhost only)
+- Exposes a simple chat API on `127.0.0.1` (localhost only; binding to
+  any other host fails at startup)
 - Manages model memory so it does not overload the computer
-- Unloads the model automatically when not in use
-- Works with systemd as a background service
+- Phase 2: loads a small CPU model (1B-3B) and runs inference
+- Phase 2: auto-unloads the model when idle
+
+The model loader and inference engine are skeletons in Phase 1; they
+are stubs that validate input but do not read or execute any model.
+
 
 ## Quick Start
 
@@ -25,7 +29,7 @@ source venv/bin/activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Create the config file
+# 3. Create the config file (add your model path here)
 cp config/config.example.yaml config/config.yaml
 
 # 4. Start the server (development mode)
