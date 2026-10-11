@@ -1,0 +1,30 @@
+# ai-bubu configuration template
+# Copy this file to config/config.yaml and edit the values you need.
+# The file config/config.yaml is ignored by Git - put no secrets there.
+
+server:
+  # Bind address: 127.0.0.1 for localhost only.
+  # Do NOT use 0.0.0.0 unless you understand the security risk.
+  host: "127.0.0.1"
+  port: 5001
+
+model:
+  # Path to your model file (gguf, safetensors, or bin).
+  path: null
+
+  # Maximum tokens to generate in one response.
+  max_tokens: 512
+
+  # Seconds of inactivity before the model is unloaded automatically.
+  idle_timeout_seconds: 300
+
+security:
+  # Maximum request body size in bytes (1 MB default).
+  max_request_size_bytes: 1048576
+
+  # Maximum prompt length in tokens.
+  max_prompt_tokens: 4096
+
+memory:
+  # Stop running the model if RAM usage exceeds this percent.
+  max_usage_percent: 75

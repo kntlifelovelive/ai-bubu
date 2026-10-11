@@ -1,0 +1,21 @@
+[Unit]
+Description=ai-bubu Local AI Server
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+WorkingDirectory=/opt/ai-bubu
+ExecStart=/opt/ai-bubu/venv/bin/python -m src.server
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ai-bubu
+
+[Install]
+WantedBy=multi-user.target

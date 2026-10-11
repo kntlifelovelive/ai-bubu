@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local configuration with secrets (NEVER commit real credentials)
+.env
+config/config.yaml
+
+# Test artifacts
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.mypy_cache/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Logs (keep them out of git)
+*.log
+logs/
+
+# Models (large files, download separately)
+*.gguf
+*.safetensors
+*.bin
+models/
